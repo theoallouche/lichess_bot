@@ -1,11 +1,25 @@
+import copy
 import time
+import threading
 from typing import List, Tuple, Optional
 
 import chess
 import chess.pgn
+from chess.polyglot import zobrist_hash
 
 
 MATERIAL_VALUE = {chess.PAWN: 1, chess.ROOK: 5, chess.KNIGHT: 3, chess.BISHOP: 3, chess.QUEEN: 9}
+
+
+class ThreadWithReturnValue(threading.Thread):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.result = None
+
+    def run(self):
+        if self._target is not None:
+            self.result = self._target(*self._args, **self._kwargs)
 
 
 class ChessAI:
@@ -15,6 +29,7 @@ class ChessAI:
         self.color = color
         self.board = chess.Board()
         self.game = chess.pgn.Game()
+        self.evaluated_positions = {}
 
     @staticmethod
     def _count_material_value(board: chess.Board, color: chess.Color) -> int:
@@ -55,19 +70,28 @@ class ChessAI:
         # score += 3*int(board.is_into_check(move))
         return score
 
-    @staticmethod
-    def negamax(board: chess.Board, depth: int, maximizer: chess.Color,
+    def negamax(self, board: chess.Board, depth: int, maximizer: chess.Color,
                 alpha: float, beta: float, asked_depth: int, last_best_move: Optional[chess.Move]) -> Tuple[float, chess.Move, int, list[chess.Move]]:
         """ Negamax tree search. Return the best move of the position based on
-        the evaluation function. It aloso return its associated value and
-        variant and the total visited positions."""
+        the evaluation function. It also returns its associated value and
+        variant and the total visited positions.
+        """
+        alphaOrig = alpha
+        key = zobrist_hash(board)
+        if entry:= self.evaluated_positions.get(key):
+            if entry['depth'] >= depth:
+                if entry['flag'] == "EXACT":
+                    return entry['value'], entry['bestmove'], 0, []
+                elif entry['flag'] == "LOWERBOUND":
+                    alpha = max(alpha, entry['value'])
+                elif entry['flag'] == "UPPERBOUND":
+                    beta = min(beta, entry['value'])
+                if alpha >= beta:
+                    return entry['value'], entry['bestmove'], 0, []
+
         if depth == 0 or board.is_game_over():
-            if depth == 0:
-                path = board.move_stack[-asked_depth:]
-            else:
-                n_moves = asked_depth - depth
-                path = board.move_stack[-n_moves:]
-            return (maximizer*2-1)*ChessAI.evaluation(board), None, 1, path
+            n_moves = asked_depth if depth == 0 else asked_depth - depth
+            return (maximizer*2-1)*ChessAI.evaluation(board), None, 1, board.move_stack[-n_moves:]
 
         bestmove = None
         best_variant = []
@@ -80,7 +104,7 @@ class ChessAI:
             sorted_moves.insert(0, last_best_move)
         for move in sorted_moves:
             board.push(move)
-            eval_, _, count, variant = ChessAI.negamax(board, depth-1, not maximizer, -beta, -alpha, asked_depth, last_best_move=None)
+            eval_, _, count, variant = self.negamax(board, depth-1, not maximizer, -beta, -alpha, asked_depth, last_best_move)
             total_nodes += count
             board.pop()
             value = max(value, -eval_)
@@ -90,29 +114,41 @@ class ChessAI:
                 best_variant = variant
                 if alpha >= beta:
                     break
+
+        if value <= alphaOrig:
+            flag = "UPPERBOUND"
+        elif value >= beta:
+            flag = "LOWERBOUND"
+        else:
+            flag = "EXACT"
+        self.evaluated_positions[key] = {'value': value, 'depth': depth, 'flag': flag, 'bestmove': bestmove}
         return value, bestmove, total_nodes, best_variant
 
     def find_move(self, timeout: float = 30) -> chess.Move:
         """ Find the best move according to the evaluation function."""
-        depth = 1
-        last_run_duration = 0.0
-        consumed_time = 0.0
+        remaining_time = timeout
         last_best_move = None
-        while consumed_time < timeout - last_run_duration and depth <= self.max_depth:
+        backup = copy.deepcopy(self.board)
+        for depth in range(1, self.max_depth + 1):
             start = time.time()
-            eval_, move, nnodes, variant = ChessAI.negamax(self.board, depth, self.color, float("-inf"), float("inf"), depth, last_best_move=last_best_move)
+            x = ThreadWithReturnValue(target=self.negamax, args=(self.board, depth, self.color, float("-inf"), float("inf"), depth, last_best_move,))
+            x.start()
+            x.join(timeout=remaining_time)
+            if x.result is None:
+                break
+            eval_, move, nnodes, variant = x.result
             last_run_duration = time.time() - start
-            consumed_time += last_run_duration
-            print(f"{eval_:>+3d} {self.board.san(move):<6} {self.board.variation_san(variant):<50} {nnodes:>6} nodes in {last_run_duration:.2f}s")
-            depth +=1
-            last_best_move = move
-        print("")
+            remaining_time -= last_run_duration
+            print(f"{eval_:>+3d} {self.board.san(move):<6} {self.board.variation_san(variant):<50} {nnodes:>6} nodes in {last_run_duration:.2f}s {len(self.evaluated_positions)}")
+        # Last thread has timeout. Attributes (like self.board) have been altered and must be restored
+        self.board = backup
         return move
 
     def play(self):
         while not self.board.is_game_over():
             move = self.find_move(timeout=10)
             self.board.push(move)
+            print(self.board.unicode(borders=False, empty_square='⭘', orientation=True))
 
 
 if __name__ =='__main__':
