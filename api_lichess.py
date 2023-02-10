@@ -14,7 +14,7 @@ class LichessWorker(threading.Thread):
         self.client = client
         self.stream = client.bots.stream_game_state(game_id)
         self.current_state = next(self.stream)
-        self.ai = ChessAI(4, chess.WHITE if color == 'white' else chess.BLACK)
+        self.ai = ChessAI(7, chess.WHITE if color == 'white' else chess.BLACK)
 
     def have_to_move(self, moves, game_state_event):
         if game_state_event['status'] != 'started': # This fails to detect draw on opponent move as the event on opponent move is still status=started
@@ -32,13 +32,13 @@ class LichessWorker(threading.Thread):
         self.ai.board.push(played_move)
         print("\n", self.ai.board.unicode(borders=False, empty_square='⭘', orientation=self.ai.color), "\n")
         if self.have_to_move(moves, game_state_event):
-            move = self.ai.find_move(timeout=100)
+            move = self.ai.find_move(timeout=20)
             self.client.bots.make_move(self.game_id, move) # Can fail if opponent drew?
 
     def run(self):
          # If white, initiate the first move
         if self.ai.color == chess.WHITE:
-            move = self.ai.find_move()
+            move = self.ai.find_move(timeout=20)
             self.client.bots.make_move(self.game_id, move)
         for event in self.stream:
             if event['type'] == 'gameState': # When a move is played, a draw offered or the game ends.

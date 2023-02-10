@@ -1,5 +1,5 @@
 import time
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 import chess
 import chess.pgn
@@ -57,7 +57,7 @@ class ChessAI:
 
     @staticmethod
     def negamax(board: chess.Board, depth: int, maximizer: chess.Color,
-                alpha: float, beta: float, asked_depth: int) -> Tuple[float, chess.Move, int, list[chess.Move]]:
+                alpha: float, beta: float, asked_depth: int, last_best_move: Optional[chess.Move]) -> Tuple[float, chess.Move, int, list[chess.Move]]:
         """ Negamax tree search. Return the best move of the position based on
         the evaluation function. It aloso return its associated value and
         variant and the total visited positions."""
@@ -75,9 +75,12 @@ class ChessAI:
         total_nodes = 0
         sorted_moves = list(board.legal_moves)
         sorted_moves.sort(key=lambda move: ChessAI._get_move_priority(board, move), reverse=True)
+        if last_best_move is not None and last_best_move in sorted_moves:
+            sorted_moves.remove(last_best_move)
+            sorted_moves.insert(0, last_best_move)
         for move in sorted_moves:
             board.push(move)
-            eval_, _, count, variant = ChessAI.negamax(board, depth-1, not maximizer, -beta, -alpha, asked_depth)
+            eval_, _, count, variant = ChessAI.negamax(board, depth-1, not maximizer, -beta, -alpha, asked_depth, last_best_move=None)
             total_nodes += count
             board.pop()
             value = max(value, -eval_)
@@ -89,18 +92,20 @@ class ChessAI:
                     break
         return value, bestmove, total_nodes, best_variant
 
-    def find_move(self, timeout: float = 100) -> chess.Move:
+    def find_move(self, timeout: float = 30) -> chess.Move:
         """ Find the best move according to the evaluation function."""
         depth = 1
         last_run_duration = 0.0
         consumed_time = 0.0
+        last_best_move = None
         while consumed_time < timeout - last_run_duration and depth <= self.max_depth:
             start = time.time()
-            eval_, move, nnodes, variant = ChessAI.negamax(self.board, depth, self.color, float("-inf"), float("inf"), depth)
+            eval_, move, nnodes, variant = ChessAI.negamax(self.board, depth, self.color, float("-inf"), float("inf"), depth, last_best_move=last_best_move)
             last_run_duration = time.time() - start
             consumed_time += last_run_duration
             print(f"{eval_:>+3d} {self.board.san(move):<6} {self.board.variation_san(variant):<50} {nnodes:>6} nodes in {last_run_duration:.2f}s")
             depth +=1
+            last_best_move = move
         print("")
         return move
 
