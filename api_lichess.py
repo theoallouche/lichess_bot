@@ -65,5 +65,8 @@ class LichessBot:
 
 
 if __name__ =='__main__':
-    client = LichessBot(token_session="Your token")
+    with open("token.txt", "r") as token_file:
+        token = token_file.read()
+        print(token)
+    client = LichessBot(token_session=token)
     client.launch()
