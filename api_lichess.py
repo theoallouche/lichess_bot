@@ -37,7 +37,7 @@ class LichessWorker(threading.Thread):
             time_key = 'wtime' if self.ai.color == chess.WHITE else 'btime'
             seconds_left = (game_state_event[time_key] - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)).total_seconds()
             allocate_time = self.ai.time_manager(seconds_left)
-            print(f"{seconds_left}s left. Allocating {allocate_time}s")
+            print(f"{seconds_left}s left. Allocating {allocate_time:.2f}s")
             move = self.ai.find_move(timeout=allocate_time)
             self.client.bots.make_move(self.game_id, move)
 

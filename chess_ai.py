@@ -32,10 +32,23 @@ class ChessAI:
         self.game = chess.pgn.Game()
         self.evaluated_positions = {}
 
+    # @staticmethod
+    # def _count_material_value(board: chess.Board, color: chess.Color) -> int:
+    #     """ Count material value of `color` player based on the conventional evaluation"""
+    #     return sum(value*len(board.pieces(piece, color)) for piece, value in MATERIAL_VALUE.items())
+
     @staticmethod
     def _count_material_value(board: chess.Board, color: chess.Color) -> int:
-        """ Count material value of `color` player based on the conventional evaluation"""
-        return sum(value*len(board.pieces(piece, color)) for piece, value in MATERIAL_VALUE.items())
+        white = board.occupied_co[chess.WHITE]
+        black = board.occupied_co[chess.BLACK]
+        return (
+            chess.popcount(white & board.pawns) - chess.popcount(black & board.pawns) +
+            3 * (chess.popcount(white & board.knights) - chess.popcount(black & board.knights)) +
+            3 * (chess.popcount(white & board.bishops) - chess.popcount(black & board.bishops)) +
+            5 * (chess.popcount(white & board.rooks) - chess.popcount(black & board.rooks)) +
+            9 * (chess.popcount(white & board.queens) - chess.popcount(black & board.queens))
+        )
+
 
     @staticmethod
     def evaluation(board: chess.Board, result, depth) -> int:
@@ -48,11 +61,14 @@ class ChessAI:
             return white_win_value
         if result == '0-1':
             return -white_win_value
-        return ChessAI._count_material_value(board, chess.WHITE) - \
-               ChessAI._count_material_value(board, chess.BLACK)
+        if board.is_repetition():
+            return 0
+        # return ChessAI._count_material_value(board, chess.WHITE) - \
+        #        ChessAI._count_material_value(board, chess.BLACK)
+        return ChessAI._count_material_value(board, chess.WHITE)
 
-    @staticmethod
-    def _get_move_priority(board: chess.Board, move: chess.Move):
+    # @staticmethod
+    def _get_move_priority(self, board: chess.Board, move: chess.Move):
         """ Give a move a priority score for the evaluation in order to sort the
         moves to make the Alpha-Beta pruning converge faster.
         This has no effect on the evaluation result.
@@ -60,15 +76,34 @@ class ChessAI:
         score = 0
         # Taking a good opponent piece with a bad piece should prioritized
         if board.is_capture(move):
-            taker = board.piece_at(move.from_square).piece_type
-            taken = chess.PAWN if board.is_en_passant(move) else board.piece_at(move.to_square).piece_type
-            score += 10*taken - taker
+            taker = board.piece_type_at(move.from_square)
+            taken = chess.PAWN if board.is_en_passant(move) else board.piece_type_at(move.to_square)
+            mvv_lva_scores = [[0, 0, 0, 0, 0, 0, 0],        # victim K, attacker K, Q, R, B, N, P, None
+                              [50, 51, 52, 53, 54, 55, 0],  # victim Q, attacker K, Q, R, B, N, P, None
+                              [40, 41, 42, 43, 44, 45, 0],  # victim R, attacker K, Q, R, B, N, P, None
+                              [30, 31, 32, 33, 34, 35, 0],  # victim B, attacker K, Q, R, B, N, P, None
+                              [20, 21, 22, 23, 24, 25, 0],  # victim N, attacker K, Q, R, B, N, P, None
+                              [10, 11, 12, 13, 14, 15, 0],  # victim P, attacker K, Q, R, B, N, P, None
+                              [0, 0, 0, 0, 0, 0, 0]]        # victim None, attacker K, Q, R, B, N, P, None
+            score += mvv_lva_scores[taken][taker]
+
+        if move in self.evaluated_positions:
+            score += 60
 
         # Moving to an attacked square should not be prioritized
-        score -= 3*int(board.is_attacked_by(not board.turn, move.to_square))
+        # score -= 3*int(board.is_attacked_by(not board.turn, move.to_square))
 
         # score += 3*int(board.is_into_check(move))
         return score
+
+    # @staticmethod
+    def sort_moves(self, board: chess.Board, last_best_move=None):
+        sorted_moves = list(board.legal_moves)
+        sorted_moves.sort(key=lambda move: self._get_move_priority(board, move), reverse=True)
+        if last_best_move is not None and last_best_move in sorted_moves:
+            sorted_moves.remove(last_best_move)
+            sorted_moves.insert(0, last_best_move)
+        return sorted_moves
 
     def negamax(self, board: chess.Board, depth: int, maximizer: chess.Color,
                 alpha: float, beta: float, asked_depth: int, last_best_move: Optional[chess.Move]) -> Tuple[float, chess.Move, int, list[chess.Move]]:
@@ -81,34 +116,34 @@ class ChessAI:
         if entry:= self.evaluated_positions.get(key):
             if entry['depth'] >= depth:
                 if entry['flag'] == "EXACT":
-                    return entry['value'], entry['bestmove']
+                    return entry['value'], entry['bestmove'], 0, []
                 elif entry['flag'] == "LOWERBOUND":
                     alpha = max(alpha, entry['value'])
                 elif entry['flag'] == "UPPERBOUND":
                     beta = min(beta, entry['value'])
                 if alpha >= beta:
-                    return entry['value'], entry['bestmove']
+                    return entry['value'], entry['bestmove'], 0, []
 
-        result = board.result(claim_draw=True) # 3-fold repetition automatically triggered on Lichess
+        result = board.result(claim_draw=False) # 3-fold repetition automatically triggered on Lichess
         if result != "*" or depth == 0:
             perspective = maximizer*2-1
-            return perspective*ChessAI.evaluation(board, result, depth), None
+            n_moves = asked_depth if depth == 0 else asked_depth - depth
+            return perspective*ChessAI.evaluation(board, result, depth), None, 1, board.move_stack[-n_moves:]
 
         bestmove = None
+        best_variant = []
+        n_evaluated_positions = 0
         value = float("-inf")
-        sorted_moves = list(board.legal_moves)
-        sorted_moves.sort(key=lambda move: ChessAI._get_move_priority(board, move), reverse=True)
-        if last_best_move is not None and last_best_move in sorted_moves:
-            sorted_moves.remove(last_best_move)
-            sorted_moves.insert(0, last_best_move)
-        for move in sorted_moves:
+        for move in self.sort_moves(board):
             board.push(move)
-            eval_, _, = self.negamax(board, depth-1, not maximizer, -beta, -alpha, asked_depth, last_best_move)
+            eval_, _, count, variant = self.negamax(board, depth-1, not maximizer, -beta, -alpha, asked_depth, last_best_move)
+            n_evaluated_positions += count
             board.pop()
             value = max(value, -eval_)
             if value > alpha:
                 bestmove = move
                 alpha = value
+                best_variant = variant
                 if alpha >= beta:
                     break
 
@@ -119,7 +154,7 @@ class ChessAI:
         else:
             flag = "EXACT"
         self.evaluated_positions[key] = {'value': value, 'depth': depth, 'flag': flag, 'bestmove': bestmove}
-        return value, bestmove
+        return value, bestmove, n_evaluated_positions, best_variant
 
     def find_move(self, timeout: float = 30) -> chess.Move:
         """ Find the best move according to the evaluation function."""
@@ -131,16 +166,19 @@ class ChessAI:
         for depth in range(2, self.max_depth + 1):
             backup = copy.deepcopy(self.board) # Last thread will timeout. Attributes (like self.board) would be altered
             start = time.time()
+
             x = ThreadWithReturnValue(target=self.negamax, args=(backup, depth, self.color, float("-inf"), float("inf"), depth, last_best_move,))
             x.start()
             x.join(timeout=remaining_time)
             if x.result is None:
                 break
-            eval_, last_best_move = x.result
+            eval_, last_best_move, nnodes, variant = x.result
+
+            # eval_, last_best_move, nnodes, variant = self.negamax(backup, depth, self.color, float("-inf"), float("inf"), depth, last_best_move)
+
             last_run_duration = time.time() - start
             remaining_time -= last_run_duration
-            # print(f"{eval_:>+3d} {self.board.san(move):<6} {self.board.variation_san(variant):<50} {nnodes:>6} nodes in {last_run_duration:.2f}s {len(self.evaluated_positions)}")
-            print(f"{eval_:>+3d} {self.board.san(last_best_move):<6} in {last_run_duration:.2f}s {len(self.evaluated_positions)}")
+            print(f"{eval_:>+3d} {self.board.san(last_best_move):<6} {self.board.variation_san(variant):<50} {nnodes:>6} nodes in {last_run_duration:.2f}s (TT={len(self.evaluated_positions)})")
             if remaining_time < timeout / 2:
                 return last_best_move
         return last_best_move
@@ -152,7 +190,7 @@ class ChessAI:
 
     def play(self):
         while not self.board.is_game_over():
-            move = self.find_move(timeout=10)
+            move = self.find_move(timeout=1)
             if move is None:
                 break
             self.board.push(move)
@@ -160,5 +198,16 @@ class ChessAI:
 
 
 if __name__ =='__main__':
-    chess_ai = ChessAI(5, chess.WHITE)
+    chess_ai = ChessAI(8, chess.WHITE)
+    import yappi
+
+    # yappi.start()
     chess_ai.play()
+    # yappi.stop()
+
+    # threads = yappi.get_thread_stats()
+    # for thread in threads:
+    #     print(
+    #         "Function stats for (%s) (%d)" % (thread.name, thread.id)
+    #     )  # it is the Thread.__class__.__name__
+    #     yappi.get_func_stats(ctx_id=thread.id).print_all()
