@@ -1,5 +1,6 @@
 import datetime
 import threading
+import time
 
 import chess
 import berserk
@@ -61,15 +62,20 @@ class LichessBot:
         self.client = berserk.Client(session=berserk.TokenSession(token_session))
 
     def handle_challenge(self, event):
-        self.client.bots.accept_challenge(event['challenge']['id'])
+        # self.client.bots.accept_challenge(event['challenge']['id'])
+        pass
 
     def launch(self):
+        self.client.challenges.create('maia1', True, clock_limit=60, clock_increment=0)
         for event in self.client.bots.stream_incoming_events():
             if event['type'] == 'challenge':
                 self.handle_challenge(event)
             elif event['type'] == 'gameStart':
                 game = LichessWorker(self.client, event['game']['id'], event['game']['color'])
                 game.start()
+            elif event['type'] == 'gameFinish':
+                time.sleep(1)
+                self.client.challenges.create('maia1', True, clock_limit=60, clock_increment=0)
 
 
 if __name__ =='__main__':

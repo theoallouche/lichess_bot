@@ -62,6 +62,7 @@ class ChessAI:
         if result == '0-1':
             return -white_win_value
         if board.is_repetition():
+            print("3fold repetition")
             return 0
         # return ChessAI._count_material_value(board, chess.WHITE) - \
         #        ChessAI._count_material_value(board, chess.BLACK)
