@@ -1,3 +1,4 @@
+import datetime
 import threading
 
 import chess
@@ -14,7 +15,7 @@ class LichessWorker(threading.Thread):
         self.client = client
         self.stream = client.bots.stream_game_state(game_id)
         self.current_state = next(self.stream)
-        self.ai = ChessAI(7, chess.WHITE if color == 'white' else chess.BLACK)
+        self.ai = ChessAI(10, chess.WHITE if color == 'white' else chess.BLACK)
 
     def have_to_move(self, moves, game_state_event):
         if game_state_event['status'] != 'started': # This fails to detect draw on opponent move as the event on opponent move is still status=started
@@ -25,26 +26,33 @@ class LichessWorker(threading.Thread):
         return last_player != self.ai.color
 
     def handle_state_change(self, game_state_event):
-        # print(game_state_event)
         moves = game_state_event['moves'].split()
+        if len(moves) == len(self.ai.board.move_stack): # or check for wdraw or bdraw in event keys
+            return # Could be a draw offer. Ignore it.
         played_move = chess.Move.from_uci(moves[-1])
         print(f"{self.ai.board.san(played_move)} played")
         self.ai.board.push(played_move)
         print("\n", self.ai.board.unicode(borders=False, empty_square='⭘', orientation=self.ai.color), "\n")
         if self.have_to_move(moves, game_state_event):
-            move = self.ai.find_move(timeout=20)
-            self.client.bots.make_move(self.game_id, move) # Can fail if opponent drew?
+            time_key = 'wtime' if self.ai.color == chess.WHITE else 'btime'
+            seconds_left = (game_state_event[time_key] - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)).total_seconds()
+            allocate_time = self.ai.time_manager(seconds_left)
+            print(f"{seconds_left}s left. Allocating {allocate_time}s")
+            move = self.ai.find_move(timeout=allocate_time)
+            self.client.bots.make_move(self.game_id, move)
 
     def run(self):
          # If white, initiate the first move
         if self.ai.color == chess.WHITE:
-            move = self.ai.find_move(timeout=20)
+            move = self.ai.find_move(timeout=3)
             self.client.bots.make_move(self.game_id, move)
+
         for event in self.stream:
+            if event['type'] == 'gameFinish' or ('status' in event and event['status'] != 'started'):
+                print(f"End of game {self.game_id}") # Could also be the opponent disconnexion
+                return
             if event['type'] == 'gameState': # When a move is played, a draw offered or the game ends.
                 self.handle_state_change(event)
-            if event['type'] == 'gameFinish':
-                return
 
 
 class LichessBot:
