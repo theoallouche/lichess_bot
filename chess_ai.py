@@ -32,13 +32,9 @@ class ChessAI:
         self.game = chess.pgn.Game()
         self.evaluated_positions = {}
 
-    # @staticmethod
-    # def _count_material_value(board: chess.Board, color: chess.Color) -> int:
-    #     """ Count material value of `color` player based on the conventional evaluation"""
-    #     return sum(value*len(board.pieces(piece, color)) for piece, value in MATERIAL_VALUE.items())
-
     @staticmethod
     def _count_material_value(board: chess.Board, color: chess.Color) -> int:
+        """ Count material value of `color` player based on the conventional evaluation"""
         white = board.occupied_co[chess.WHITE]
         black = board.occupied_co[chess.BLACK]
         return (
@@ -49,9 +45,8 @@ class ChessAI:
             9 * (chess.popcount(white & board.queens) - chess.popcount(black & board.queens))
         )
 
-
     @staticmethod
-    def evaluation(board: chess.Board, result, depth) -> int:
+    def evaluation(board: chess.Board, result, depth, three_fold_repetition) -> int:
         """ Evaluate `board`. The evaluation is based on material only.
         Positive sign for White, negative for Black."""
         if result == '1/2-1/2':
@@ -61,14 +56,10 @@ class ChessAI:
             return white_win_value
         if result == '0-1':
             return -white_win_value
-        if board.is_repetition():
-            print("3fold repetition")
+        if three_fold_repetition:
             return 0
-        # return ChessAI._count_material_value(board, chess.WHITE) - \
-        #        ChessAI._count_material_value(board, chess.BLACK)
         return ChessAI._count_material_value(board, chess.WHITE)
 
-    # @staticmethod
     def _get_move_priority(self, board: chess.Board, move: chess.Move):
         """ Give a move a priority score for the evaluation in order to sort the
         moves to make the Alpha-Beta pruning converge faster.
@@ -91,13 +82,8 @@ class ChessAI:
         if move in self.evaluated_positions:
             score += 60
 
-        # Moving to an attacked square should not be prioritized
-        # score -= 3*int(board.is_attacked_by(not board.turn, move.to_square))
-
-        # score += 3*int(board.is_into_check(move))
         return score
 
-    # @staticmethod
     def sort_moves(self, board: chess.Board, last_best_move=None):
         sorted_moves = list(board.legal_moves)
         sorted_moves.sort(key=lambda move: self._get_move_priority(board, move), reverse=True)
@@ -125,11 +111,16 @@ class ChessAI:
                 if alpha >= beta:
                     return entry['value'], entry['bestmove'], 0, []
 
-        result = board.result(claim_draw=False) # 3-fold repetition automatically triggered on Lichess
-        if result != "*" or depth == 0:
-            perspective = maximizer*2-1
+        # 3-fold repetition automatically triggers the draw on Lichess so we have to take care of it
+        # result(claim_draw=True) would call can_claim_threefold_repetition which is overkill as it would
+        # check all the possible next moves of the position.
+        # we only need to check if the current position is a 3fold repetition
+        three_fold_repetition = board.is_repetition()
+        result = board.result(claim_draw=False)
+        if result != "*" or depth == 0 or three_fold_repetition:
             n_moves = asked_depth if depth == 0 else asked_depth - depth
-            return perspective*ChessAI.evaluation(board, result, depth), None, 1, board.move_stack[-n_moves:]
+            perspective = maximizer*2-1
+            return perspective*ChessAI.evaluation(board, result, depth, three_fold_repetition), None, 1, board.move_stack[-n_moves:]
 
         bestmove = None
         best_variant = []
@@ -200,15 +191,4 @@ class ChessAI:
 
 if __name__ =='__main__':
     chess_ai = ChessAI(8, chess.WHITE)
-    import yappi
-
-    # yappi.start()
     chess_ai.play()
-    # yappi.stop()
-
-    # threads = yappi.get_thread_stats()
-    # for thread in threads:
-    #     print(
-    #         "Function stats for (%s) (%d)" % (thread.name, thread.id)
-    #     )  # it is the Thread.__class__.__name__
-    #     yappi.get_func_stats(ctx_id=thread.id).print_all()
